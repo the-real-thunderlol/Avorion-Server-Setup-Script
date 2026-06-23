@@ -59,3 +59,5 @@ echo "WantedBy=multi-user.target" >> /etc/systemd/system/avorion.service
 systemctl daemon-reload
 systemctl enable avorion
 systemctl start avorion
+
+echo "Created by Thunderlol. Enjoy your server." 

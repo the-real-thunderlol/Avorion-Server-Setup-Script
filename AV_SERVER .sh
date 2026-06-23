@@ -1,63 +1,127 @@
-USER64=""
-GALAXY="mygalaxy"
-SEED="mygalaxy"
-RCON_PASS="insert_name"
-MAX_PLAYERS="10"
+#!/bin/bash
+set -e
+
+SERVER_USER="Avorion"
+INSTALL_DIR="/opt/avorion"
+STEAMCMD_DIR="/opt/steamcmd"
+
+GALAXY_NAME="avorion_galaxy"
+SERVER_NAME="This is my Avorion Server"
 PORT="27000"
 QUERY_PORT="27003"
-RCON_PORT="27015"
 
-apt update && apt upgrade -y
+ADMIN_STEAM64="PUT_YOUR_STEAM64_ID_HERE"
+SERVER_SEED="3288934782934"
 
-dpkg --add-architecture i386
-apt-get update
-apt-get install -y software-properties-common
-add-apt-repository multiverse -y
-apt-get update
-apt-get install -y lib32gcc-s1 libgl1:i386 steamcmd
+PUBLIC="true"
+LISTED="false"
 
-useradd -m -s /bin/bash steam
+# chatgpt, make it so if user doesnt update the ADMIN steam ID, let him know
+if [ "$ADMIN_STEAM64" = "PUT_YOUR_STEAM64_ID_HERE" ] || [ -z "$ADMIN_STEAM64" ]; then
+  echo "ERROR: Edit ADMIN_STEAM64 first."
+  echo "Example: ADMIN_STEAM64=\"76561198445266160\""
+  exit 1
+fi
 
-su - steam -c "/usr/games/steamcmd +force_install_dir /home/steam/avorion +login anonymous +app_update 565060 validate +quit"
+echo "=== Installing required packages ==="
+dpkg --add-architecture i386 || true
 
-mkdir -p /home/steam/.avorion/galaxies/$GALAXY
-chown -R steam:steam /home/steam/.avorion
+apt update
+apt install -y \
+  ca-certificates \
+  curl \
+  wget \
+  tar \
+  gzip \
+  sudo \
+  ufw \
+  lib32gcc-s1 \
+  libc6-i386 \
+  libstdc++6:i386 \
+  libcurl4:i386
 
-echo "[General]" > /home/steam/.avorion/galaxies/$GALAXY/server.ini
-echo "port=$PORT" >> /home/steam/.avorion/galaxies/$GALAXY/server.ini
-echo "queryport=$QUERY_PORT" >> /home/steam/.avorion/galaxies/$GALAXY/server.ini
-echo "rconport=$RCON_PORT" >> /home/steam/.avorion/galaxies/$GALAXY/server.ini
-echo "rconpassword=$RCON_PASS" >> /home/steam/.avorion/galaxies/$GALAXY/server.ini
-echo "maxPlayers=$MAX_PLAYERS" >> /home/steam/.avorion/galaxies/$GALAXY/server.ini
-echo "seed=$SEED" >> /home/steam/.avorion/galaxies/$GALAXY/server.ini
-echo "admin=$USER64" >> /home/steam/.avorion/galaxies/$GALAXY/server.ini
+update-ca-certificates
 
-chown -R steam:steam /home/steam/.avorion
+echo "=== Creating Avorion user ==="
+id -u "$SERVER_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$SERVER_USER"
 
-echo '#!/bin/bash' > /home/steam/start.sh
-echo "cd /home/steam/avorion" >> /home/steam/start.sh
-echo "./bin/AvorionServer --galaxy-name $GALAXY --port $PORT --query-port $QUERY_PORT --rcon-port $RCON_PORT --rcon-password $RCON_PASS --datapath /home/steam/.avorion" >> /home/steam/start.sh
+echo "=== Cleaning and installing SteamCMD ==="
+rm -rf "$STEAMCMD_DIR"
+mkdir -p "$STEAMCMD_DIR"
+cd "$STEAMCMD_DIR"
 
-chmod +x /home/steam/start.sh
-chown steam:steam /home/steam/start.sh
+curl -L \
+  --fail \
+  --retry 10 \
+  --retry-delay 5 \
+  --retry-connrefused \
+  --connect-timeout 20 \
+  -o steamcmd_linux.tar.gz \
+  https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
 
-systemctl restart avorion
+tar -xzf steamcmd_linux.tar.gz
 
-echo "[Unit]" > /etc/systemd/system/avorion.service
-echo "Description=Avorion Dedicated Server" >> /etc/systemd/system/avorion.service
-echo "After=network.target" >> /etc/systemd/system/avorion.service
-echo "" >> /etc/systemd/system/avorion.service
-echo "[Service]" >> /etc/systemd/system/avorion.service
-echo "User=steam" >> /etc/systemd/system/avorion.service
-echo "ExecStart=/home/steam/start.sh" >> /etc/systemd/system/avorion.service
-echo "Restart=on-failure" >> /etc/systemd/system/avorion.service
-echo "RestartSec=10" >> /etc/systemd/system/avorion.service
-echo "" >> /etc/systemd/system/avorion.service
-echo "[Install]" >> /etc/systemd/system/avorion.service
-echo "WantedBy=multi-user.target" >> /etc/systemd/system/avorion.service
+echo "=== Testing SteamCMD ==="
+"$STEAMCMD_DIR/steamcmd.sh" +quit
+
+echo "=== Installing Avorion Dedicated Server ==="
+mkdir -p "$INSTALL_DIR"
+chown -R "$SERVER_USER:$SERVER_USER" "$INSTALL_DIR"
+
+sudo -u "$SERVER_USER" "$STEAMCMD_DIR/steamcmd.sh" \
+  +force_install_dir "$INSTALL_DIR" \
+  +login anonymous \
+  +app_update 565060 validate \
+  +quit
+
+echo "=== Creating start script ==="
+cat > "$INSTALL_DIR/start.sh" <<EOL
+#!/bin/bash
+cd "$INSTALL_DIR"
+
+./server.sh \\
+  --galaxy-name "$GALAXY_NAME" \\
+  --server-name "$SERVER_NAME" \\
+  --port "$PORT" \\
+  --query-port "$QUERY_PORT" \\
+  --admin "$ADMIN_STEAM64" \\
+  --seed "$SERVER_SEED" \\
+  --public "$PUBLIC" \\
+  --listed "$LISTED"
+EOL
+
+chmod +x "$INSTALL_DIR/start.sh"
+chown "$SERVER_USER:$SERVER_USER" "$INSTALL_DIR/start.sh"
+
+echo "=== Creating systemd service ==="
+cat > /etc/systemd/system/avorion.service <<EOL
+[Unit]
+Description=Avorion Dedicated Server
+After=network.target
+
+[Service]
+Type=simple
+User=$SERVER_USER
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/start.sh
+Restart=always
+RestartSec=10
+LimitNOFILE=100000
+
+[Install]
+WantedBy=multi-user.target
+EOL
 
 systemctl daemon-reload
 systemctl enable avorion
-systemctl start avorion
 
-echo "Created by Thunderlol. Enjoy your server." 
+echo "=== Opening firewall ports ==="
+ufw allow ${PORT}/tcp || true
+ufw allow ${PORT}/udp || true
+ufw allow ${QUERY_PORT}/udp || true
+
+echo "=== Starting Avorion ==="
+systemctl restart avorion
+
+echo "Made by Thunderlol"
+echo "Github: https://github.com/the-real-thunderlol/Avorion-Server-Setup-Script"
